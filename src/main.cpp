@@ -335,45 +335,45 @@ void loop() {
   int finalL = baseSpeed, finalR = baseSpeed;
 
 
-  // ==========================================================
-  // 🏔️ MPU6050 被动爬坡拦截器 (通杀台阶、减速带、斜坡)
-  // ==========================================================
-  mpu6050.update();
-  float current_pitch = mpu6050.getAngleX();  // 确认 X 轴是俯仰角(Pitch)
+  // // ==========================================================
+  // // 🏔️ MPU6050 被动爬坡拦截器 (通杀台阶、减速带、斜坡)
+  // // ==========================================================
+  // mpu6050.update();
+  // float current_pitch = mpu6050.getAngleX();  // 确认 X 轴是俯仰角(Pitch)
 
-  // 车头翘起大于 12 度触发 (可根据实车悬挂和平地倾角微调此阈值)
-  if (current_pitch > 12.0) {
-    float climb_target_yaw = mpu6050.getAngleZ();
-    while (true) {
-      mpu6050.update();
-      float realtime_pitch = mpu6050.getAngleX();
-      float current_yaw = mpu6050.getAngleZ();
+  // // 车头翘起大于 12 度触发 (可根据实车悬挂和平地倾角微调此阈值)
+  // if (current_pitch > 12.0) {
+  //   float climb_target_yaw = mpu6050.getAngleZ();
+  //   while (true) {
+  //     mpu6050.update();
+  //     float realtime_pitch = mpu6050.getAngleX();
+  //     float current_yaw = mpu6050.getAngleZ();
 
-      // 坡道上强制锁定航向，防止跑偏掉下桥
-      float error_gyro = climb_target_yaw - current_yaw;
-      float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
-      last_error_gyro = error_gyro;
+  //     // 坡道上强制锁定航向，防止跑偏掉下桥
+  //     float error_gyro = climb_target_yaw - current_yaw;
+  //     float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
+  //     last_error_gyro = error_gyro;
 
-      applySpeed(constrain(climb_baseSpeed + (int)diff_gyro, 0, 255),
-                 constrain(climb_baseSpeed - (int)diff_gyro, 0, 255));
+  //     applySpeed(constrain(climb_baseSpeed + (int)diff_gyro, 0, 255),
+  //                constrain(climb_baseSpeed - (int)diff_gyro, 0, 255));
 
-      // OLED 提示爬坡状态
-      if (millis() % 200 < 100) {
-        display.clearDisplay();
-        display.setTextSize(2);
-        display.setCursor(10, 20);
-        display.print("CLIMBING!");
-        display.display();
-      }
+  //     // OLED 提示爬坡状态
+  //     if (millis() % 200 < 100) {
+  //       display.clearDisplay();
+  //       display.setTextSize(2);
+  //       display.setCursor(10, 20);
+  //       display.print("CLIMBING!");
+  //       display.display();
+  //     }
 
-      // 退出条件：车身恢复平坦 (Pitch 小于 5 度)
-      if (realtime_pitch < 5.0) {
-        applySpeed(255, 255);
-        delay(300);  // 给一脚大油门冲出坡顶边缘
-        break;
-      }
-    }
-  }
+  //     // 退出条件：车身恢复平坦 (Pitch 小于 5 度)
+  //     if (realtime_pitch < 5.0) {
+  //       applySpeed(255, 255);
+  //       delay(300);  // 给一脚大油门冲出坡顶边缘
+  //       break;
+  //     }
+  //   }
+  // }
 
   // ==========================================================
   // 【特种任务拦截区】(完成后强制 return 重新进入 loop)
@@ -490,6 +490,7 @@ void loop() {
   // --- 阶段 72：连续转弯后的 1秒 PD 视觉巡线对齐 ---
   if (count == 72) {
     if (millis() - turnStartTime < 1000) {
+      
       float error = (sum > black_C) ? (weightedSum / sum) : lastError;
       display_error = error;
       float correction = Kp * error + Kd * (error - lastError);
@@ -506,29 +507,53 @@ void loop() {
 
   // --- 阶段 8：陀螺仪全盲断线冲刺区 ---
   if (count == 8) {
-    target_gyro = round(mpu6050.getAngleZ() / 90.0) * 90.0;
+    displa(); 
+    // 1. 进入状态 8 的瞬间，记录当前角度作为“绝对直线”目标
+    mpu6050.update(); 
+    float target_gyro = mpu6050.getAngleZ(); 
     unsigned long st8_time = millis();
-    float ast_error_gyro = 0;
-
+    
+    // 初始化局部 PID 变量
+    float last_error_gyro = 0; 
+    
     while (count == 8) {
-      //applySpeed(climb_baseSpeed, climb_baseSpeed);
-      mpu6050.update();
-      float error_gyro = target_gyro - mpu6050.getAngleZ();
-      if (abs(error_gyro) < 0.03) { 
-        error_gyro = 0; // 只要晃动极小，就当做没动！
-      }
+      mpu6050.update(); // 更新底层传感器数据 (库内部会自动积分)
+      
+      // 2. 计算当前角度与目标角度的偏差
+      float current_angle = mpu6050.getAngleZ();
+      float error_gyro = target_gyro - current_angle;
+      
+      // ⚠️ 删掉了你加在这里的死区过滤，角度不需要死区！
+      
+      // 3. 计算 PID 差速补偿
       float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
-      ast_error_gyro = error_gyro;
-      applySpeed(constrain(climb_baseSpeed + (int)diff_gyro, 0, 255), constrain(climb_baseSpeed - (int)diff_gyro, 0, 255));
-      int current_black = 0;
-      for (int i = 0; i < 5; i++) {
-          if (analogRead(sensors[i]) > blacklin) current_black++;
+      last_error_gyro = error_gyro; // 正确更新上次误差！
+      
+      // 4. 将补偿施加到爬坡基础速度上
+      applySpeed(constrain(climb_baseSpeed - (int)diff_gyro, 0, 255), 
+                 constrain(climb_baseSpeed + (int)diff_gyro, 0, 255));
+      
+      // 5. 爬坡安全逻辑：至少盲跑 1500 毫秒 (1.5秒)，防止刚上坡车头抬起时传感器瞎报警
+      if (millis() - st8_time > 7000) { 
+        int current_black = 0;
+        // 你的模拟量检测逻辑有点问题，应该先 map 再判断
+        for (int i = 0; i < 5; i++) {
+          int raw = analogRead(sensors[i]);
+          int mappedVal = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
+          if (mappedVal > blacklin) { 
+             current_black++;
+          }
         }
-      if (current_black <= 3) {
-          count = 99;
+        
+        // 如果跑过了 1.5 秒，且再次看到了少于3根黑线（说明坡爬完了），退出状态
+        if (current_black <= 3) {
+          count = 99; // 假设 99 是停车或下一个状态
           break;
         }
-      displa();
+      }
+      
+      // 6. 刷新屏幕 (注意你的拼写错误)
+      displa(); 
     }
     return;
   }
@@ -551,7 +576,9 @@ void loop() {
         display.setCursor(10, 40);
         display.print("DONE!");
         display.display();
-        while (true)
+        while (true) {
+          applySpeed(0, 0); // 确保车子完全停稳
+        }
           ;  // 比赛结束，彻底锁死程序
       }
     }
@@ -598,7 +625,7 @@ void loop() {
 
           qr = 11;  // 强制赋予测试或比赛预案数值
           isFinished = true;
-          count = 8;
+          count = 71;
           break;
         }
         checkSerialCommands();
