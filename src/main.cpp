@@ -593,54 +593,78 @@ void loop() {
   // 🌟 可以在进入 99 状态前，强制刷新一次时间基准，防止刚进状态就误触发第一根线
   // last_cross_time = millis(); 
 
-  while (count == 99) {
-    float sensorMapped[5];
-    float sum = 0, weightedSum = 0;
-    blackCount = 0;
+  // ==========================================
+  // 🏁 终局状态：动态车位解析与停车入库
+  // ==========================================
+  if (count == 99) { // (如果你外面是用 if 判断的，保留这一层)
 
-    for (int i = 0; i < 5; i++) {
-      int raw = analogRead(sensors[i]);
-      sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
-      if (sensorMapped[i] > blacklin) blackCount++;
-      weightedSum += (float)sensorMapped[i] * weights[i];
-      sum += sensorMapped[i];
+    // 🌟 1. 战前情报解析：把二维码翻译成物理横线数量
+    int target_grid = 1; // 兜底保护：如果扫码失败或扫出乱码，默认停第1个车位，至少能拿停车分
+    
+    if (qr == 11 || qr == 21) {
+      target_grid = 1;
+    } else if (qr == 12 || qr == 22) {
+      target_grid = 3;
+    } else if (qr == 13 || qr == 23) {
+      target_grid = 5;
     }
 
-    float error = (sum > black_C) ? (weightedSum / sum) : lastError;
-    float correction = Kp * error + Kd * (error - lastError);
-    lastError = error;
+    // 🌟 2. 开启最终停车结界
+    while (count == 99) {
+      float sensorMapped[5];
+      float sum = 0, weightedSum = 0;
+      blackCount = 0;
 
-    // 🌟 修复 1：强制接管速度，挂入“泊车挡 (120)”
-    int park_speed = 120; 
-    applySpeed(constrain(park_speed + (int)correction, 0, 255), 
-               constrain(park_speed - (int)correction, 0, 255));
+      // 传感器采样与映射
+      for (int i = 0; i < 5; i++) {
+        int raw = analogRead(sensors[i]);
+        sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
+        if (sensorMapped[i] > blacklin) blackCount++;
+        weightedSum += (float)sensorMapped[i] * weights[i];
+        sum += sensorMapped[i];
+      }
 
-    if (millis() - last_cross_time > 500) {
-      
-      if (blackCount >= 3) { // 确认踩到横线
-        grid_lines_crossed++;
-        last_cross_time = millis(); 
+      // PID 循迹计算 (维持虚线保护机制)
+      float error = (sum > black_C) ? (weightedSum / sum) : lastError;
+      float correction = Kp * error + Kd * (error - lastError);
+      lastError = error;
+
+      // 强制挂入“泊车挡 (120)”
+      int park_speed = 120; 
+      applySpeed(constrain(park_speed + (int)correction, 0, 255), 
+                 constrain(park_speed - (int)correction, 0, 255));
+
+      // 🌟 3. 横线检测与“冷却时间”消抖
+      if (millis() - last_cross_time > 500) {
         
-        // 🌟 到达目标车位！执行“入库”机动
-        if (grid_lines_crossed == 5) { 
-          // 清空误差，拉直车身
-          lastError = 0;
-          applySpeed(120, 120);  // 绝对直线冲刺入库
-          delay(200);            // 确保车尾过线
+        if (blackCount >= 3) { // 确认踩到横线
+          grid_lines_crossed++;
+          last_cross_time = millis(); 
           
-          // 完美入库，断电！
-          applySpeed(0, 0); 
-          
-          display.clearDisplay();
-          display.setTextSize(2);
-          display.setCursor(10, 20);
-          display.print("MISSION");
-          display.setCursor(10, 40);
-          display.print("DONE!");
-          display.display();
-          
-          while (true) {
-            delay(1000); 
+          // 🌟 4. 关键触发：到达我们刚才解析出的动态目标车位！
+          if (grid_lines_crossed == target_grid) { 
+            
+            // 清空误差，拉直车身
+            lastError = 0;
+            applySpeed(120, 120);  // 绝对直线冲刺入库
+            delay(200);            // 确保车尾完全越过横线，进入停车框
+            
+            // 完美入库，拉手刹断电！
+            applySpeed(0, 0); 
+            
+            // 刷新胜利屏幕
+            display.clearDisplay();
+            display.setTextSize(2);
+            display.setCursor(10, 20);
+            display.print("MISSION");
+            display.setCursor(10, 40);
+            display.print("DONE!");
+            display.display();
+            
+            // 拔钥匙，彻底锁死大脑
+            while (true) {
+              delay(1000); 
+            }
           }
         }
       }
