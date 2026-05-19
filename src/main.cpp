@@ -49,12 +49,11 @@ int turnDelayTime = 280;    // 转弯前的“过线冲刺延时”(毫秒)。�
 int delay_zero_h = 2000;
 int c_5black_time = 2000;
 int black_C = 400;
-int last_speed = 60;
+int last_speed = 160;
 int h_speed = 100;
 
 float Kp = 280.0, Kd = 220.0, lastError = 0;
 float Kp_gyro = 12.0, Kd_gyro = 8.0;
-float last_error_gyro = 0;
 float turn_pwr_kp = 2.5;  //转向k值
 int turn_pwr_speed = 100;
 float target_gyro = 180;   // 目标航向角
@@ -390,36 +389,40 @@ void loop() {
     float target_yaw_41 = mpu6050.getAngleZ();  // 锁定刚进方框时的黄金航向
     unsigned long st41_time = millis();
     int phase_41 = 0;
+    float last_error_gyro = 0;
+
 
     while (count == 5) {
+       mpu6050.update();
+       float error_gyro = target_yaw_41 - mpu6050.getAngleZ();
+       float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
+       last_error_gyro = error_gyro;
 
-      // 陀螺仪强行锁死直线，绝对无视地面的噪点干扰
-      applySpeed(h_speed+5, h_speed);
+       applySpeed(constrain(climb_baseSpeed - (int)diff_gyro, 0, 255), constrain(climb_baseSpeed + (int)diff_gyro, 0, 255));
 
       if (phase_41 == 0) {
-        // 阶段 0：闭眼盲冲期。强制盲冲 1000 毫秒（⚠️请根据方框实际长度微调这个时间）
-        // 目的是确保车身完全进入干扰区，不被起点的横线再次误触发
-        if (millis() - st41_time > c_5black_time) phase_41 = 1;
+        // 消隐盲跑期
+        if (millis() - st41_time > 2000) phase_41 = 1;
       } else if (phase_41 == 1) {
-        // 阶段 1：睁眼寻找对岸的丁字路口
+        // 捕获对岸黑线
         int current_black = 0;
         for (int i = 0; i < 5; i++) {
-          if (analogRead(sensors[i]) > blacklin) current_black++;
+        int raw = analogRead(sensors[i]);
+        sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
+        if (sensorMapped[i] > blacklin) current_black++;
         }
-        // 丁字路口特征：一根长横线，至少会有 4 个以上的传感器同时看到黑色
         if (current_black >= 4) {
           phase_41 = 2;
           st41_time = millis();
         }
       } else if (phase_41 == 2) {
-        // 阶段 2：踩到丁字路口后，冲过横线防抖
-        if (millis() - st41_time > 400) {
-          count = 6;  // 🎉 成功穿越干扰区！把状态推进到 6
+        // 捕获后短暂延时，确保车尾过线
+        if (millis() - st41_time > 200) {
+          count = 6;  // 或者设置为其他适当的值
           break;
         }
       }
-
-      // OLED 屏幕实时显示干扰区状态
+      displa();
     }
     return;  // 强制打断 loop
   }
@@ -537,6 +540,7 @@ void loop() {
     target_gyro = mpu6050.getAngleZ();
     unsigned long st8_time = millis();
     int gyro_phase = 0;
+    float last_error_gyro = 0;
 
     while (count == 8) {
        mpu6050.update();
@@ -614,7 +618,7 @@ void loop() {
       lastError = error;
 
       // 强制挂入“泊车挡 (120)”
-      int park_speed = 120; 
+      int park_speed = 160; 
       applySpeed(constrain(park_speed + (int)correction, 0, 255), 
                  constrain(park_speed - (int)correction, 0, 255));
 
@@ -630,8 +634,8 @@ void loop() {
             
             // 清空误差，拉直车身
             lastError = 0;
-            applySpeed(120, 120);  // 绝对直线冲刺入库
-            delay(200);            // 确保车尾完全越过横线，进入停车框
+            applySpeed(160, 160);  // 绝对直线冲刺入库
+            delay(300);            // 确保车尾完全越过横线，进入停车框
             
             // 完美入库，拉手刹断电！
             applySpeed(0, 0); 
@@ -695,8 +699,8 @@ void loop() {
         // --- 方式 B：实体 BOOT 按键强制启动 ---
         if (digitalRead(0) == LOW) {
 
-          qr = 11;  // 强制赋予测试或比赛预案数值
-          Serial.println("BOOT Button Pressed! Forced Start: qr=11");
+          qr = 23;  // 强制赋予测试或比赛预案数值
+          Serial.println("BOOT Button Pressed! Forced Start: qr=23");
           isFinished = true;
           count = 0;
           digitalWrite(ledPin, LOW);
@@ -751,7 +755,7 @@ void loop() {
     else {
       count++;
       // 5. 盲跑逃离十字路口，防止重复触发黑线
-      delay(200);
+      delay(100);
 
 
 
