@@ -394,7 +394,7 @@ void loop() {
     while (count == 5) {
 
       // 陀螺仪强行锁死直线，绝对无视地面的噪点干扰
-      applySpeed(h_speed+5, h_speed+5);
+      applySpeed(h_speed+5, h_speed);
 
       if (phase_41 == 0) {
         // 阶段 0：闭眼盲冲期。强制盲冲 1000 毫秒（⚠️请根据方框实际长度微调这个时间）
@@ -476,23 +476,7 @@ void loop() {
             count = 7;  // 切入连续转弯路口网格区
             break;      // 打破 while(true)
           }
-          
-          // --- 环内常规 PID 循迹 ---
-          float loop_sum = 0, loop_wSum = 0;
-          for (int i = 0; i < 5; i++) {
-            int raw = analogRead(sensors[i]);
-            sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
-            loop_sum += sensorMapped[i];
-            loop_wSum += sensorMapped[i] * weights[i];
-          }
-          
-          // 注意：你在环内的防丢线阈值设了 400，如果是故意的请保留，否则建议用统一定义的 black_C
-          float error = (loop_sum > 400) ? (loop_wSum / loop_sum) : lastError;
-          float correction = Kp * error + Kd * (error - lastError);
-          lastError = error;
-          
-          applySpeed(constrain(baseSpeed + (int)correction, 0, 255), 
-                     constrain(baseSpeed - (int)correction, 0, 255));
+          applySpeed(30,255);
         }
         
         break;  // 成功逃脱状态 6 的大 while 循环
