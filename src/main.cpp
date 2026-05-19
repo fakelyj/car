@@ -560,7 +560,7 @@ void loop() {
        float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
        last_error_gyro = error_gyro;
 
-       applySpeed(constrain(climb_baseSpeed + (int)diff_gyro, 0, 255), constrain(climb_baseSpeed - (int)diff_gyro, 0, 255));
+       applySpeed(constrain(climb_baseSpeed - (int)diff_gyro, 0, 255), constrain(climb_baseSpeed + (int)diff_gyro, 0, 255));
 
       if (gyro_phase == 0) {
         // 消隐盲跑期
@@ -590,27 +590,46 @@ void loop() {
   }
 
   // --- 阶段 99：终点网格智能入库 ---
-  if (count == 99) {
-    // 🌟 1. 必须在这里保留常规的 PID 循迹，让它稳稳地开！
+  // 🌟 可以在进入 99 状态前，强制刷新一次时间基准，防止刚进状态就误触发第一根线
+  // last_cross_time = millis(); 
+
+  while (count == 99) {
+    float sensorMapped[5];
+    float sum = 0, weightedSum = 0;
+    blackCount = 0;
+
+    for (int i = 0; i < 5; i++) {
+      int raw = analogRead(sensors[i]);
+      sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
+      if (sensorMapped[i] > blacklin) blackCount++;
+      weightedSum += (float)sensorMapped[i] * weights[i];
+      sum += sensorMapped[i];
+    }
+
     float error = (sum > black_C) ? (weightedSum / sum) : lastError;
     float correction = Kp * error + Kd * (error - lastError);
     lastError = error;
 
-    // 基础速度降到 120，像个老司机一样慢慢找车位
-    applySpeed(constrain(120 + (int)correction, 0, 255), 
-               constrain(120 - (int)correction, 0, 255));
+    // 🌟 修复 1：强制接管速度，挂入“泊车挡 (120)”
+    int park_speed = 120; 
+    applySpeed(constrain(park_speed + (int)correction, 0, 255), 
+               constrain(park_speed - (int)correction, 0, 255));
 
-    // 🌟 2. 横线检测与“冷却时间”消抖
-    // 只有距离上一次压线超过了 500ms（冷却完毕），才允许再次计数
     if (millis() - last_cross_time > 500) {
       
       if (blackCount >= 3) { // 确认踩到横线
         grid_lines_crossed++;
-        last_cross_time = millis(); // 刷新冷却时间，接下来 500ms 内不会重复计数
+        last_cross_time = millis(); 
         
-        // 🌟 3. 到达目标，拉手刹熄火！
-        if (grid_lines_crossed == 5) { // 这里的 5 最好换成你二维码解出来的变量
-          applySpeed(0, 0); // 立刻断电
+        // 🌟 到达目标车位！执行“入库”机动
+        if (grid_lines_crossed == 5) { 
+          // 清空误差，拉直车身
+          lastError = 0;
+          applySpeed(120, 120);  // 绝对直线冲刺入库
+          delay(200);            // 确保车尾过线
+          
+          // 完美入库，断电！
+          applySpeed(0, 0); 
           
           display.clearDisplay();
           display.setTextSize(2);
@@ -620,7 +639,6 @@ void loop() {
           display.print("DONE!");
           display.display();
           
-          // 彻底锁死，神仙来了也别想让轮子动一下
           while (true) {
             delay(1000); 
           }
@@ -628,7 +646,6 @@ void loop() {
       }
     }
   }
-
   // ==========================================================
   // 【常规非阻塞状态机】 (路口转弯 & PD常规巡线)
   // ==========================================================
