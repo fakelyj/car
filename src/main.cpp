@@ -368,8 +368,7 @@ void loop() {
 
   while (count == 6) {
     float loop_sum = 0, loop_wSum = 0;
-
-    // 1. 读取传感器并映射
+    float weights[] = { -4.0, -2.0, 0.0, 1.0, 2.0 };
     for (int i = 0; i < 5; i++) {
       int raw = analogRead(sensors[i]);
       sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
@@ -414,6 +413,7 @@ void loop() {
               mpu6050.update(); // 出环时也保持更新，为下一个路口留好底子
             }
             count = 7;  // 切入连续转弯路口网格区
+            float weights[] = { -2.0, -1.0, 0.0, 1.0, 2.0 };
             break;      // 打破 while(true)
           }
           applySpeed(30,255);
@@ -655,9 +655,6 @@ void loop() {
       count++;
       // 5. 盲跑逃离十字路口，防止重复触发黑线
       delay(100);
-
-
-
       blackCount = 0;
       lastError = 0;  // 清除历史误差，重新开始笔直循迹
     }
