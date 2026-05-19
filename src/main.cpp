@@ -368,7 +368,7 @@ void loop() {
 
   while (count == 6) {
     float loop_sum = 0, loop_wSum = 0;
-    float weights[] = { -4.0, -2.0, 0.0, 1.0, 2.0 };
+    float local_weights[] = { -4.0, -2.0, 0.0, 1.0, 2.0 };
     for (int i = 0; i < 5; i++) {
       int raw = analogRead(sensors[i]);
       sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
@@ -402,21 +402,34 @@ void loop() {
         while (true) {
           mpu6050.update();
           float relative_yaw = mpu6050.getAngleZ() - entry_yaw;
-          // 🌟 优化 2：加上绝对值，无论左转环还是右转环都能完美识别！
-          // 比如 tar_yaw 设为 250 (留一点提前量切出)
+          
+          // 判断出环角度
           if (abs(relative_yaw) >= abs(tar_yaw)) { 
-            
-            // 🌟 优化 3：非阻塞盲出圆环
-            applySpeed(205, 205);
+            // 3. 盲出圆环
+            applySpeed(205, 205); // 笔直冲出环岛
             blind_start = millis();
             while (millis() - blind_start < outc_delay) {
-              mpu6050.update(); // 出环时也保持更新，为下一个路口留好底子
+              mpu6050.update(); 
             }
-            count = 7;  // 切入连续转弯路口网格区
-            float weights[] = { -2.0, -1.0, 0.0, 1.0, 2.0 };
-            break;      // 打破 while(true)
+            count = 7;  
+            break; // 成功逃脱！
           }
-          applySpeed(30,255);
+          
+          // 🌟 核心修复：环岛内部的 PID 循迹代码！
+          float inner_sum = 0, inner_wSum = 0;
+          for (int i = 0; i < 5; i++) {
+            int raw = analogRead(sensors[i]);
+            int mappedVal = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
+            inner_sum += mappedVal;
+            inner_wSum += mappedVal * local_weights[i];
+          }
+          
+          float inner_error = (inner_sum > black_C) ? (inner_wSum / inner_sum) : lastError;
+          // 注意：环岛内通常需要更大的 Kp 把车头死死按在弯道上，你可以考虑乘以一个系数，比如 Kp * 1.2
+          float inner_correction = Kp * inner_error + Kd * (inner_error - lastError);
+          lastError = inner_error;
+          applySpeed(constrain(baseSpeed + (int)inner_correction, 0, 255), 
+                     constrain(baseSpeed - (int)inner_correction, 0, 255));
         }
         
         break;  // 成功逃脱状态 6 的大 while 循环
