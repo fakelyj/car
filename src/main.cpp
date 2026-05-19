@@ -390,6 +390,9 @@ void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
   mpu6050.begin();
+    if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("OLED 屏幕初始化失败！"));
+  }
   display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
@@ -605,6 +608,7 @@ void loop() {
   // 🏁 终局状态：动态车位解析与停车入库
   // ==========================================
 if (count == 99) {
+  int counter = 0;
   if (qr == 11 || qr == 21) {
       qr = 11;
     } else if (qr == 12 || qr == 22) {
@@ -635,6 +639,10 @@ if (count == 99) {
 
       // 🌟 发现车位引导线！
       if (blackCount >= 4) { 
+        if(counter == 3) {
+          applySpeed(0, 0); // 绝对刹停，准备识别
+          while (true) { delay(1000); }
+        } // 已经处理过一次了，避免重复识别同一个车位
         applySpeed(park_speed, park_speed);
         // 1. 稍微往前拱一点，让车头正下方的摄像头完美对准地上的标志
         // (因为传感器在车头最前方，此时标志可能还在车底)
@@ -647,11 +655,11 @@ if (count == 99) {
         // 3. 呼叫 Edge Impulse 进行 AI 视觉识别
         int ai_result = -1;
         digitalWrite(ledPin, HIGH);
-        while (ai_result == -1) {
+        unsigned long ai_start_time = millis(); 
+        while (ai_result == -1 && (millis() - ai_start_time < 2000)) {
           ai_result = runEdgeImpulseRecognition();
         }
-
-        // 4. 命运的抉择：这是我们要找的车位吗？
+        digitalWrite(ledPin, LOW);
         if (ai_result == qr) { 
           // ==========================================
           // 🎉 匹配成功！执行完美入库！
@@ -683,6 +691,7 @@ if (count == 99) {
           // 清空旧的误差，把方向盘交还给上面的 PID，继续循迹找下一个路口
           lastError = 0; 
         }
+        counter++;
       }
     }
 }
