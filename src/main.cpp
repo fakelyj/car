@@ -569,7 +569,9 @@ void loop() {
         // 捕获对岸黑线
         int current_black = 0;
         for (int i = 0; i < 5; i++) {
-          if (analogRead(sensors[i]) < blacklin) current_black++;
+        int raw = analogRead(sensors[i]);
+        sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
+        if (sensorMapped[i] > blacklin) current_black++;
         }
         if (current_black <= 3) {
           gyro_phase = 2;
