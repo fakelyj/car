@@ -28,31 +28,32 @@ const int revPinL = 40;
 const int revPinR = 39;
 const int channelL = 0;
 const int channelR = 1;
+const int ledPin = 21;
 const int freq = 5000;    // 20kHz 频率，消除电机低频啸叫
 const int resolution1 = 8;  // 8位分辨率，速度控制范围 0~255
 
 const int minVals[] = { 277, 270, 170, 274, 271 };       // 最新白底极小值
-const int maxVals[] = { 2747, 2593, 1620, 2840, 2987 };  // 最新黑线极大值
+const int maxVals[] = { 2747, 2593, 1620, 3240, 3487 };  // 最新黑线极大值
 float weights[] = { -2.0, -1.0, 0.0, 1.0, 2.0 };
 
 // ==========================================
 // 2. 核心控制参数
 // ==========================================
-int baseSpeed = 205;        // 基础前进速度
-int climb_baseSpeed = 130;  // 爬坡补偿速度 (稍微给大点，防止溜车)
+int baseSpeed = 255;        // 基础前进速度
+int climb_baseSpeed = 200;  // 爬坡补偿速度 (稍微给大点，防止溜车)
 int turnfast = 145;         // 转弯外侧速度
 int turnslow = -145;        // 转弯内侧速度
 int delay_zero = 200;       // 通用停顿时间
 int blacklin = 500;         // 灰度黑线阈值 (数据已映射至0-1000，500为完美中值)
-int turnDelayTime = 440;    // 转弯前的“过线冲刺延时”(毫秒)。数值越大，冲得越深。
+int turnDelayTime = 280;    // 转弯前的“过线冲刺延时”(毫秒)。数值越大，冲得越深。
 int delay_zero_h = 2000;
 int c_5black_time = 2000;
 int black_C = 400;
 int last_speed = 60;
 int h_speed = 100;
 
-float Kp = 200.0, Kd = 120.0, lastError = 0;
-float Kp_gyro = 1.4, Kd_gyro = 3.0;
+float Kp = 280.0, Kd = 220.0, lastError = 0;
+float Kp_gyro = 12.0, Kd_gyro = 8.0;
 float last_error_gyro = 0;
 float turn_pwr_kp = 2.5;  //转向k值
 int turn_pwr_speed = 100;
@@ -62,7 +63,7 @@ float filter_alpha = 0.2;  // 滤波系数：建议从 0.3 开始调
 float filtered_yaw = 0.0;  // 存放过滤后的纯净航向角
 int inc_speed_L = 45;
 int inc_speed_R = 105;
-int inc_delay = 2800;  // 进环岛盲跑时间
+int inc_delay = 1800;  // 进环岛盲跑时间
 int outc_delay = 800;  // 出环岛盲跑时间
 
 
@@ -75,6 +76,7 @@ int blackCount = 0;       // 当前压线传感器数量
 bool isFinished = false;  // 起点扫码是否完成
 bool isTurning = false;   // 是否处于转弯状态
 unsigned long turnStartTime = 0;
+unsigned long last_cross_time = 0;
 
 int grid_lines_crossed = 0;  // 用于记录终点停车区的横线数
 float display_yaw = 0;
@@ -196,7 +198,7 @@ void customGyroCalib() {
   display.display();
 
   float rx = 0, ry = 0, rz = 0;
-  int samples = 1000;
+  int samples = 100;
 
   // 1. 先将陀螺仪旧的误差清零，保证采样纯净
   mpu6050.setGyroOffsets(0.0, 0.0, 0.0);
@@ -214,13 +216,13 @@ void customGyroCalib() {
     if (i % 100 == 0) {
       Serial.print("Sampling: ");
       Serial.print(i);
-      Serial.println(" / 1000");
+      Serial.println(" / 100");
 
       display.fillRect(0, 20, 128, 44, SSD1306_BLACK);  // 局部清屏
       display.setCursor(0, 20);
       display.print("Sample: ");
       display.print(i);
-      display.println(" / 1000");
+      display.println(" / 100");
 
       // 进度条动画
       int barW = map(i, 0, samples, 0, 120);
@@ -276,7 +278,7 @@ void executeGyroTurn(float angle_offset) {
     }
 
     // 4. 救命呼吸阀与超时防死机保护 (2.5秒强行跳出)
-    if (millis() - turn_timeout > 2500) break;
+    if (millis() - turn_timeout > 2000) break;
   }
 
   // 5. 到位后的“电子点刹”，强制锁死履带，消除惯性滑动！
@@ -287,6 +289,7 @@ void setup() {
   pinMode(0, INPUT_PULLUP);
   pinMode(revPinL, OUTPUT);
   pinMode(revPinR, OUTPUT);
+  pinMode(ledPin, OUTPUT);
   ledcSetup(channelL, freq, resolution1);
   ledcSetup(channelR, freq, resolution1);
   ledcAttachPin(motorL, channelL);
@@ -336,45 +339,45 @@ void loop() {
   int finalL = baseSpeed, finalR = baseSpeed;
 
 
-  // ==========================================================
-  // 🏔️ MPU6050 被动爬坡拦截器 (通杀台阶、减速带、斜坡)
-  // ==========================================================
-  mpu6050.update();
-  float current_pitch = mpu6050.getAngleX();  // 确认 X 轴是俯仰角(Pitch)
+  // // ==========================================================
+  // // 🏔️ MPU6050 被动爬坡拦截器 (通杀台阶、减速带、斜坡)
+  // // ==========================================================
+  // mpu6050.update();
+  // float current_pitch = mpu6050.getAngleX();  // 确认 X 轴是俯仰角(Pitch)
 
-  // 车头翘起大于 12 度触发 (可根据实车悬挂和平地倾角微调此阈值)
-  if (current_pitch > 12.0) {
-    float climb_target_yaw = mpu6050.getAngleZ();
-    while (true) {
-      mpu6050.update();
-      float realtime_pitch = mpu6050.getAngleX();
-      float current_yaw = mpu6050.getAngleZ();
+  // // 车头翘起大于 12 度触发 (可根据实车悬挂和平地倾角微调此阈值)
+  // if (current_pitch > 12.0) {
+  //   float climb_target_yaw = mpu6050.getAngleZ();
+  //   while (true) {
+  //     mpu6050.update();
+  //     float realtime_pitch = mpu6050.getAngleX();
+  //     float current_yaw = mpu6050.getAngleZ();
 
-      // 坡道上强制锁定航向，防止跑偏掉下桥
-      float error_gyro = climb_target_yaw - current_yaw;
-      float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
-      last_error_gyro = error_gyro;
+  //     // 坡道上强制锁定航向，防止跑偏掉下桥
+  //     float error_gyro = climb_target_yaw - current_yaw;
+  //     float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
+  //     last_error_gyro = error_gyro;
 
-      applySpeed(constrain(climb_baseSpeed + (int)diff_gyro, 0, 255),
-                 constrain(climb_baseSpeed - (int)diff_gyro, 0, 255));
+  //     applySpeed(constrain(climb_baseSpeed + (int)diff_gyro, 0, 255),
+  //                constrain(climb_baseSpeed - (int)diff_gyro, 0, 255));
 
-      // OLED 提示爬坡状态
-      if (millis() % 200 < 100) {
-        display.clearDisplay();
-        display.setTextSize(2);
-        display.setCursor(10, 20);
-        display.print("CLIMBING!");
-        display.display();
-      }
+  //     // OLED 提示爬坡状态
+  //     if (millis() % 200 < 100) {
+  //       display.clearDisplay();
+  //       display.setTextSize(2);
+  //       display.setCursor(10, 20);
+  //       display.print("CLIMBING!");
+  //       display.display();
+  //     }
 
-      // 退出条件：车身恢复平坦 (Pitch 小于 5 度)
-      if (realtime_pitch < 5.0) {
-        applySpeed(255, 255);
-        delay(300);  // 给一脚大油门冲出坡顶边缘
-        break;
-      }
-    }
-  }
+  //     // 退出条件：车身恢复平坦 (Pitch 小于 5 度)
+  //     if (realtime_pitch < 5.0) {
+  //       applySpeed(255, 255);
+  //       delay(300);  // 给一脚大油门冲出坡顶边缘
+  //       break;
+  //     }
+  //   }
+  // }
 
   // ==========================================================
   // 【特种任务拦截区】(完成后强制 return 重新进入 loop)
@@ -445,14 +448,54 @@ void loop() {
     // 4. 屏蔽 800ms 防止上一个路口误触发（现在它能正常工作了！）
     if (millis() - st6_time > 800) {
       // 最左侧和中间同时压线，确认圆环切点
+      // 最左侧和中间同时压线，确认圆环切点
       if (sensorMapped[0] > blacklin && sensorMapped[2] > blacklin) {
-
-        // ⚠️ 机械师预警：盲冲 1000ms 非常危险！
-        applySpeed(baseSpeed, baseSpeed);
-        delay(1000);
-
-        count = 7;
-        break;  // 成功逃脱状态 6
+        mpu6050.update();
+        float entry_yaw = mpu6050.getAngleZ();
+        // 🌟 优化 1：非阻塞盲入圆环（保持陀螺仪神经活跃！）
+        applySpeed(30, 255); // 假设这是左转入环的差速
+        unsigned long blind_start = millis();
+        while (millis() - blind_start < inc_delay) {
+          mpu6050.update(); // 在盲入期间，死死咬住角度更新！
+        }
+        lastError = 0; 
+        // 正式进入环内循迹
+        while (true) {
+          mpu6050.update();
+          float relative_yaw = mpu6050.getAngleZ() - entry_yaw;
+          // 🌟 优化 2：加上绝对值，无论左转环还是右转环都能完美识别！
+          // 比如 tar_yaw 设为 250 (留一点提前量切出)
+          if (abs(relative_yaw) >= abs(tar_yaw)) { 
+            
+            // 🌟 优化 3：非阻塞盲出圆环
+            applySpeed(205, 205);
+            blind_start = millis();
+            while (millis() - blind_start < outc_delay) {
+              mpu6050.update(); // 出环时也保持更新，为下一个路口留好底子
+            }
+            count = 7;  // 切入连续转弯路口网格区
+            break;      // 打破 while(true)
+          }
+          
+          // --- 环内常规 PID 循迹 ---
+          float loop_sum = 0, loop_wSum = 0;
+          for (int i = 0; i < 5; i++) {
+            int raw = analogRead(sensors[i]);
+            sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
+            loop_sum += sensorMapped[i];
+            loop_wSum += sensorMapped[i] * weights[i];
+          }
+          
+          // 注意：你在环内的防丢线阈值设了 400，如果是故意的请保留，否则建议用统一定义的 black_C
+          float error = (loop_sum > 400) ? (loop_wSum / loop_sum) : lastError;
+          float correction = Kp * error + Kd * (error - lastError);
+          lastError = error;
+          
+          applySpeed(constrain(baseSpeed + (int)correction, 0, 255), 
+                     constrain(baseSpeed - (int)correction, 0, 255));
+        }
+        
+        break;  // 成功逃脱状态 6 的大 while 循环
       }
     }
   }
@@ -490,31 +533,16 @@ void loop() {
   //  displa();
   // --- 阶段 72：连续转弯后的 1秒 PD 视觉巡线对齐 ---
   if (count == 72) {
-    if (millis() - turnStartTime < 1000) {
-      float error = (sum > black_C) ? (weightedSum / sum) : lastError;
-      display_error = error;
-      float correction = Kp * error + Kd * (error - lastError);
-      lastError = error;
-
-      // 使用慢速 (160) 强制把车身拉直，为接下来的陀螺仪全盲冲刺做准备
-      applySpeed(constrain(last_speed + (int)correction, 0, 255), constrain(last_speed - (int)correction, 0, 255));
-      displa();
-      return;
-    } else {
-      count = 8;  // 时间到，姿态对齐完成，切入陀螺仪导航
-    }
+      count = 8;  // 时间到，姿态对齐完成，切入陀螺仪导航的全盲冲刺阶段
   }
 
   // --- 阶段 8：陀螺仪全盲断线冲刺区 ---
   if (count == 8) {
-    // applySpeed(0, 0);
-    // delay(500);
     target_gyro = mpu6050.getAngleZ();
     unsigned long st8_time = millis();
     int gyro_phase = 0;
 
     while (count == 8) {
-      //applySpeed(climb_baseSpeed, climb_baseSpeed);
        mpu6050.update();
        float error_gyro = target_gyro - mpu6050.getAngleZ();
        float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
@@ -524,7 +552,7 @@ void loop() {
 
       if (gyro_phase == 0) {
         // 消隐盲跑期
-        if (millis() - st8_time > 3000) gyro_phase = 1;
+        if (millis() - st8_time > 1500) gyro_phase = 1;
       } else if (gyro_phase == 1) {
         // 捕获对岸黑线
         int current_black = 0;
@@ -549,25 +577,40 @@ void loop() {
 
   // --- 阶段 99：终点网格智能入库 ---
   if (count == 99) {
-    baseSpeed = 120;  // 降速找车位，防止冲过头
-    if (blackCount >= 3) {
-      grid_lines_crossed++;
-      applySpeed(255, 255);
-      delay(250);  // 冲过当前横线，防止抖动误判
+    // 🌟 1. 必须在这里保留常规的 PID 循迹，让它稳稳地开！
+    float error = (sum > black_C) ? (weightedSum / sum) : lastError;
+    float correction = Kp * error + Kd * (error - lastError);
+    lastError = error;
 
+    // 基础速度降到 120，像个老司机一样慢慢找车位
+    applySpeed(constrain(120 + (int)correction, 0, 255), 
+               constrain(120 - (int)correction, 0, 255));
 
-      // 当压过的横线数等于二维码目标数时，精准停机
-      if (grid_lines_crossed == 5) {
-        applySpeed(0, 0);
-        display.clearDisplay();
-        display.setTextSize(2);
-        display.setCursor(10, 20);
-        display.print("MISSION");
-        display.setCursor(10, 40);
-        display.print("DONE!");
-        display.display();
-        while (true)
-          ;  // 比赛结束，彻底锁死程序
+    // 🌟 2. 横线检测与“冷却时间”消抖
+    // 只有距离上一次压线超过了 500ms（冷却完毕），才允许再次计数
+    if (millis() - last_cross_time > 500) {
+      
+      if (blackCount >= 3) { // 确认踩到横线
+        grid_lines_crossed++;
+        last_cross_time = millis(); // 刷新冷却时间，接下来 500ms 内不会重复计数
+        
+        // 🌟 3. 到达目标，拉手刹熄火！
+        if (grid_lines_crossed == 5) { // 这里的 5 最好换成你二维码解出来的变量
+          applySpeed(0, 0); // 立刻断电
+          
+          display.clearDisplay();
+          display.setTextSize(2);
+          display.setCursor(10, 20);
+          display.print("MISSION");
+          display.setCursor(10, 40);
+          display.print("DONE!");
+          display.display();
+          
+          // 彻底锁死，神仙来了也别想让轮子动一下
+          while (true) {
+            delay(1000); 
+          }
+        }
       }
     }
   }
@@ -592,6 +635,7 @@ void loop() {
 
       while (true) {
         // --- 方式 A：摄像头扫码启动 ---
+        digitalWrite(ledPin, HIGH);
         if (reader.receiveQrCode(&qrCodeData, 100)) {
           if (qrCodeData.valid) {
             // 扫码成功且数据有效
@@ -600,6 +644,7 @@ void loop() {
             Serial.println(qr);
             isFinished = true;
             count = 0;
+            digitalWrite(ledPin, LOW);
             break;
           } else {
             // 🚨 加入的无效扫码报错逻辑
@@ -615,6 +660,7 @@ void loop() {
           Serial.println("BOOT Button Pressed! Forced Start: qr=11");
           isFinished = true;
           count = 0;
+          digitalWrite(ledPin, LOW);
           break;
         }
         checkSerialCommands();
