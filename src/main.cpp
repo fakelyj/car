@@ -533,7 +533,19 @@ void loop() {
   //  displa();
   // --- 阶段 72：连续转弯后的 1秒 PD 视觉巡线对齐 ---
   if (count == 72) {
-      count = 8;  // 时间到，姿态对齐完成，切入陀螺仪导航的全盲冲刺阶段
+    if (millis() - turnStartTime < 1000) {
+      float error = (sum > black_C) ? (weightedSum / sum) : lastError;
+      display_error = error;
+      float correction = Kp * error + Kd * (error - lastError);
+      lastError = error;
+
+      // 使用慢速 (160) 强制把车身拉直，为接下来的陀螺仪全盲冲刺做准备
+      applySpeed(constrain(last_speed + (int)correction, 0, 255), constrain(last_speed - (int)correction, 0, 255));
+      displa();
+      return;
+    } else {
+      count = 8;  // 时间到，姿态对齐完成，切入陀螺仪导航
+    }
   }
 
   // --- 阶段 8：陀螺仪全盲断线冲刺区 ---
@@ -552,12 +564,12 @@ void loop() {
 
       if (gyro_phase == 0) {
         // 消隐盲跑期
-        if (millis() - st8_time > 1500) gyro_phase = 1;
+        if (millis() - st8_time > 6000) gyro_phase = 1;
       } else if (gyro_phase == 1) {
         // 捕获对岸黑线
         int current_black = 0;
         for (int i = 0; i < 5; i++) {
-          if (analogRead(sensors[i]) > blacklin) current_black++;
+          if (analogRead(sensors[i]) < blacklin) current_black++;
         }
         if (current_black <= 3) {
           gyro_phase = 2;
