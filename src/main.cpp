@@ -4,7 +4,27 @@
 #include <Adafruit_SSD1306.h>
 #include <ESP32QRCodeReader.h>
 #include <MPU6050_tockn.h>
+#include <fakelyj-project-1_inferencing.h>
+#include "edge-impulse-sdk/dsp/image/image.hpp"
 
+// 2. Edge Impulse 的图像缓冲指针
+uint8_t *snapshot_buf = nullptr;
+
+// 3. 核心数据泵：把 RGB 图像喂给神经网络 (直接提取自你的示例代码)
+static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr) {
+    size_t pixel_ix = offset * 3;
+    size_t pixels_left = length;
+    size_t out_ptr_ix = 0;
+
+    while (pixels_left != 0) {
+        // Swap BGR to RGB (修复 ESP32 摄像头的色彩反转问题)
+        out_ptr[out_ptr_ix] = (snapshot_buf[pixel_ix + 2] << 16) + (snapshot_buf[pixel_ix + 1] << 8) + snapshot_buf[pixel_ix];
+        out_ptr_ix++;
+        pixel_ix+=3;
+        pixels_left--;
+    }
+    return 0;
+}
 // ==========================================
 // 1. 硬件引脚与对象定义 (已更新最新标定数据)
 // ==========================================
@@ -70,6 +90,90 @@ int grid_lines_crossed = 0;  // 用于记录终点停车区的横线数
 float display_yaw = 0;
 float display_error = 0;
 
+// ==========================================
+// 🧠 Edge Impulse 图像捕获与映射识别 (无冲突版)
+// ==========================================
+int runEdgeImpulseRecognition() {
+  // 1. 借用已经初始化的摄像头抓拍一张照片
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("❌ 摄像头抓取失败！");
+    return -1;
+  }
+
+  // 2. 动态分配内存以容纳 RGB888 数据
+  // (无论你的二维码库把摄像头设为多大分辨率，这里都能自动适应)
+  snapshot_buf = (uint8_t*)malloc(fb->width * fb->height * 3);
+  if(snapshot_buf == nullptr) {
+      Serial.println("❌ PSRAM 内存分配失败！");
+      esp_camera_fb_return(fb);
+      return -1;
+  }
+
+  // 3. 将摄像头的原始格式 (JPEG 或 RGB565) 转换为标准的 RGB888
+  bool converted = fmt2rgb888(fb->buf, fb->len, fb->format, snapshot_buf);
+  esp_camera_fb_return(fb); // 转换完立刻释放摄像头底层内存
+  
+  if(!converted){
+      Serial.println("❌ 图像格式转换失败！");
+      free(snapshot_buf);
+      return -1;
+  }
+
+  // 4. 将高分辨率画面“暴力压缩”成 Edge Impulse 模型需要的小尺寸 (比如 96x96)
+  ei::image::processing::crop_and_interpolate_rgb888(
+      snapshot_buf,
+      fb->width, fb->height, // 输入尺寸：当前相机的真实分辨率
+      snapshot_buf,
+      EI_CLASSIFIER_INPUT_WIDTH, EI_CLASSIFIER_INPUT_HEIGHT // 输出尺寸：你训练时的分辨率
+  );
+
+  // 5. 组装 AI 信号兵
+  ei::signal_t signal;
+  signal.total_length = EI_CLASSIFIER_INPUT_WIDTH * EI_CLASSIFIER_INPUT_HEIGHT;
+  signal.get_data = &ei_camera_get_data;
+
+  // 6. 发起 AI 推理！
+  ei_impulse_result_t result = { 0 };
+  EI_IMPULSE_ERROR err = run_classifier(&signal, &result, false);
+  
+  if (err != EI_IMPULSE_OK) {
+      Serial.printf("❌ AI 推理核心崩溃 (%d)\n", err);
+      free(snapshot_buf);
+      return -1;
+  }
+
+  // 7. 遍历大脑，找出可能性最高的结果
+  float max_confidence = 0;
+  String best_label = "";
+  for (uint16_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+      if (result.classification[i].value > max_confidence) {
+          max_confidence = result.classification[i].value;
+          best_label = result.classification[i].label;
+      }
+  }
+
+  // 释放庞大的图像内存，防止下次爆掉
+  free(snapshot_buf); 
+
+  // 8. 翻译指令 (70% 置信度防抖)
+  if (max_confidence > 0.70) { 
+      Serial.printf("🎯 AI 锁定目标: %s (置信度: %.2f)\n", best_label.c_str(), max_confidence);
+      
+      display.clearDisplay();
+      display.setCursor(0, 20);
+      display.print("Target: ");
+      display.println(best_label);
+      display.display();
+
+      // 将你训练的标签 "a" "b" "c" 翻译为底层物理变量
+      if (best_label == "a") return 11; 
+      if (best_label == "b") return 12; 
+      if (best_label == "c") return 13; 
+  }
+
+  return -1; // 没看清，要求重试
+}
 // ==========================================
 // 函数声明
 // ==========================================
@@ -500,25 +604,19 @@ void loop() {
   // ==========================================
   // 🏁 终局状态：动态车位解析与停车入库
   // ==========================================
-  if (count == 99) { // (如果你外面是用 if 判断的，保留这一层)
-
-    int target_grid = 1; // 兜底保护：如果扫码失败或扫出乱码，默认停第1个车位，至少能拿停车分
-    
-    if (qr == 11 || qr == 21) {
-      target_grid = 1;
+if (count == 99) {
+  if (qr == 11 || qr == 21) {
+      qr = 11;
     } else if (qr == 12 || qr == 22) {
-      target_grid = 3;
+      qr = 12;
     } else if (qr == 13 || qr == 23) {
-      target_grid = 5;
+      qr = 13;
     }
-
-    // 🌟 2. 开启最终停车结界
     while (count == 99) {
       float sensorMapped[5];
       float sum = 0, weightedSum = 0;
       blackCount = 0;
-
-      // 传感器采样与映射
+      
       for (int i = 0; i < 5; i++) {
         int raw = analogRead(sensors[i]);
         sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
@@ -526,53 +624,68 @@ void loop() {
         weightedSum += (float)sensorMapped[i] * weights[i];
         sum += sensorMapped[i];
       }
-
-      // PID 循迹计算 (维持虚线保护机制)
+      
       float error = (sum > black_C) ? (weightedSum / sum) : lastError;
       float correction = Kp * error + Kd * (error - lastError);
       lastError = error;
-
-      // 强制挂入“泊车挡 (120)”
+      
       int park_speed = 160; 
       applySpeed(constrain(park_speed + (int)correction, 0, 255), 
                  constrain(park_speed - (int)correction, 0, 255));
 
-      // 🌟 3. 横线检测与“冷却时间”消抖
-      if (millis() - last_cross_time > 500) {
+      // 🌟 发现车位引导线！
+      if (blackCount >= 4) { 
+        applySpeed(park_speed, park_speed);
+        // 1. 稍微往前拱一点，让车头正下方的摄像头完美对准地上的标志
+        // (因为传感器在车头最前方，此时标志可能还在车底)
+        delay(200); 
         
-        if (blackCount >= 3) { // 确认踩到横线
-          grid_lines_crossed++;
-          last_cross_time = millis(); 
+        // 2. 绝对刹停！给摄像头 500ms 的时间去对焦和稳定画面
+        applySpeed(0, 0);
+        delay(500); 
+        
+        // 3. 呼叫 Edge Impulse 进行 AI 视觉识别
+        int ai_result = -1;
+        digitalWrite(ledPin, HIGH);
+        while (ai_result == -1) {
+          ai_result = runEdgeImpulseRecognition();
+        }
+
+        // 4. 命运的抉择：这是我们要找的车位吗？
+        if (ai_result == qr) { 
+          // ==========================================
+          // 🎉 匹配成功！执行完美入库！
+          // ==========================================
+          lastError = 0;
+          applySpeed(160, 160);  // 绝对直线冲刺入库
+          delay(300);            // 确保车尾完全越过横线，进入停车框
           
-          // 🌟 4. 关键触发：到达我们刚才解析出的动态目标车位！
-          if (grid_lines_crossed == target_grid) { 
-            
-            // 清空误差，拉直车身
-            lastError = 0;
-            applySpeed(160, 160);  // 绝对直线冲刺入库
-            delay(300);            // 确保车尾完全越过横线，进入停车框
-            
-            // 完美入库，拉手刹断电！
-            applySpeed(0, 0); 
-            
-            // 刷新胜利屏幕
-            display.clearDisplay();
-            display.setTextSize(2);
-            display.setCursor(10, 20);
-            display.print("MISSION");
-            display.setCursor(10, 40);
-            display.print("DONE!");
-            display.display();
-            
-            // 拔钥匙，彻底锁死大脑
-            while (true) {
-              delay(1000); 
-            }
+          applySpeed(0, 0);      // 完美入库，拉手刹断电！
+          
+          display.clearDisplay();
+          display.setTextSize(2);
+          display.setCursor(10, 40);
+          display.print("DONE!");
+          display.display();
+          
+          while (true) {
+            delay(1000); // 比赛结束，彻底锁死大脑，等待评委检查
           }
+          
+        } else {
+          // ==========================================
+          // ❌ 匹配失败！这不是我们的车位，赶紧离开！
+          // ==========================================
+          // 盲跑一段距离，强行跨过当前这根黑线，防止下个瞬间重复识别
+          applySpeed(160, 160); 
+          delay(500); // 盲冲 500ms（根据实际情况微调，只要车身离开横线即可）
+          digitalWrite(ledPin, LOW);
+          // 清空旧的误差，把方向盘交还给上面的 PID，继续循迹找下一个路口
+          lastError = 0; 
         }
       }
     }
-  }
+}
   // ==========================================================
   // 【常规非阻塞状态机】 (路口转弯 & PD常规巡线)
   // ==========================================================
@@ -600,6 +713,7 @@ void loop() {
             isFinished = true;
             count = 0;
             digitalWrite(ledPin, LOW);
+            reader.end();
             break;
           } else {
             // 🚨 加入的无效扫码报错逻辑
