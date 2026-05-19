@@ -41,27 +41,16 @@ float weights[] = { -2.0, -1.0, 0.0, 1.0, 2.0 };
 // ==========================================
 int baseSpeed = 255;        // 基础前进速度
 int climb_baseSpeed = 200;  // 爬坡补偿速度 (稍微给大点，防止溜车)
-int turnfast = 145;         // 转弯外侧速度
-int turnslow = -145;        // 转弯内侧速度
 int delay_zero = 200;       // 通用停顿时间
 int blacklin = 500;         // 灰度黑线阈值 (数据已映射至0-1000，500为完美中值)
 int turnDelayTime = 280;    // 转弯前的“过线冲刺延时”(毫秒)。数值越大，冲得越深。
-int delay_zero_h = 2000;
-int c_5black_time = 2000;
 int black_C = 400;
 int last_speed = 160;
-int h_speed = 100;
 
 float Kp = 280.0, Kd = 220.0, lastError = 0;
 float Kp_gyro = 12.0, Kd_gyro = 8.0;
-float turn_pwr_kp = 2.5;  //转向k值
 int turn_pwr_speed = 100;
-float target_gyro = 180;   // 目标航向角
 float tar_yaw = 350;       // 环岛出环相对目标角
-float filter_alpha = 0.2;  // 滤波系数：建议从 0.3 开始调
-float filtered_yaw = 0.0;  // 存放过滤后的纯净航向角
-int inc_speed_L = 45;
-int inc_speed_R = 105;
 int inc_delay = 1800;  // 进环岛盲跑时间
 int outc_delay = 800;  // 出环岛盲跑时间
 
@@ -296,25 +285,13 @@ void setup() {
   Wire.begin(I2C_SDA, I2C_SCL);
   Serial.begin(115200);
   Serial.setTimeout(10);
-
   mpu6050.begin();
-
-
-
-
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("OLED init failed");
-    for (;;)
-      ;
-  }
-
   display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(20, 20);
   display.print("READY!");
   display.display();
-
   for (int i = 0; i < 5; i++) pinMode(sensors[i], INPUT);
 }
 // ==========================================
@@ -337,46 +314,6 @@ void loop() {
 
   int finalL = baseSpeed, finalR = baseSpeed;
 
-
-  // // ==========================================================
-  // // 🏔️ MPU6050 被动爬坡拦截器 (通杀台阶、减速带、斜坡)
-  // // ==========================================================
-  // mpu6050.update();
-  // float current_pitch = mpu6050.getAngleX();  // 确认 X 轴是俯仰角(Pitch)
-
-  // // 车头翘起大于 12 度触发 (可根据实车悬挂和平地倾角微调此阈值)
-  // if (current_pitch > 12.0) {
-  //   float climb_target_yaw = mpu6050.getAngleZ();
-  //   while (true) {
-  //     mpu6050.update();
-  //     float realtime_pitch = mpu6050.getAngleX();
-  //     float current_yaw = mpu6050.getAngleZ();
-
-  //     // 坡道上强制锁定航向，防止跑偏掉下桥
-  //     float error_gyro = climb_target_yaw - current_yaw;
-  //     float diff_gyro = (Kp_gyro * error_gyro) + (Kd_gyro * (error_gyro - last_error_gyro));
-  //     last_error_gyro = error_gyro;
-
-  //     applySpeed(constrain(climb_baseSpeed + (int)diff_gyro, 0, 255),
-  //                constrain(climb_baseSpeed - (int)diff_gyro, 0, 255));
-
-  //     // OLED 提示爬坡状态
-  //     if (millis() % 200 < 100) {
-  //       display.clearDisplay();
-  //       display.setTextSize(2);
-  //       display.setCursor(10, 20);
-  //       display.print("CLIMBING!");
-  //       display.display();
-  //     }
-
-  //     // 退出条件：车身恢复平坦 (Pitch 小于 5 度)
-  //     if (realtime_pitch < 5.0) {
-  //       applySpeed(255, 255);
-  //       delay(300);  // 给一脚大油门冲出坡顶边缘
-  //       break;
-  //     }
-  //   }
-  // }
 
   // ==========================================================
   // 【特种任务拦截区】(完成后强制 return 重新进入 loop)
@@ -486,38 +423,7 @@ void loop() {
       }
     }
   }
-  //   display_error = error;
-  //   displa();
-  // }
-
-
-  // while (is_in_circle) {
-  //   mpu6050.update();
-  //   float relative_yaw = mpu6050.getAngleZ() - entry_yaw;
-  //   display_yaw = relative_yaw;
-
-  //   if (relative_yaw >= tar_yaw) {  // 满足出环角度
-  //     applySpeed(160, 160);
-  //     delay(outc_delay);  // 盲出圆环
-  //     is_in_circle = false;
-  //     count = 7;  // 切入连续转弯路口网格区
-  //     break;
-  //   }
-
-  //  float loop_sum = 0, loop_wSum = 0;
-  //  for (int i = 0; i < 5; i++) {
-  //    int raw = analogRead(sensors[i]);
-  //    sensorMapped[i] = constrain(map(raw, minVals[i], maxVals[i], 1000, 0), 0, 1000);
-  //    loop_sum += sensorMapped[i];
-  //    loop_wSum += sensorMapped[i] * weights[i];
-  //  }
-  //  float error = (loop_sum > black_C) ? (loop_wSum / loop_sum) : lastError;
-  //  float correction = Kp * error + Kd * (error - lastError);
-  //  lastError = error;
-
-  // applySpeed(constrain(140 + (int)correction, 0, 255), constrain(140 - (int)correction, 0, 255));
-  //  display_error = error;
-  //  displa();
+  
   // --- 阶段 72：连续转弯后的 1秒 PD 视觉巡线对齐 ---
   if (count == 72) {
     if (millis() - turnStartTime < 1000) {
@@ -537,7 +443,7 @@ void loop() {
 
   // --- 阶段 8：陀螺仪全盲断线冲刺区 ---
   if (count == 8) {
-    target_gyro = mpu6050.getAngleZ();
+    float target_gyro = mpu6050.getAngleZ();;   // 目标航向角
     unsigned long st8_time = millis();
     int gyro_phase = 0;
     float last_error_gyro = 0;
@@ -577,16 +483,12 @@ void loop() {
     return;
   }
 
-  // --- 阶段 99：终点网格智能入库 ---
-  // 🌟 可以在进入 99 状态前，强制刷新一次时间基准，防止刚进状态就误触发第一根线
-  // last_cross_time = millis(); 
 
   // ==========================================
   // 🏁 终局状态：动态车位解析与停车入库
   // ==========================================
   if (count == 99) { // (如果你外面是用 if 判断的，保留这一层)
 
-    // 🌟 1. 战前情报解析：把二维码翻译成物理横线数量
     int target_grid = 1; // 兜底保护：如果扫码失败或扫出乱码，默认停第1个车位，至少能拿停车分
     
     if (qr == 11 || qr == 21) {
@@ -662,9 +564,6 @@ void loop() {
   // 【常规非阻塞状态机】 (路口转弯 & PD常规巡线)
   // ==========================================================
 
-  // ... 后面正常的起步扫码和 PD 寻线代码保持不变 ...
-  // 【状态：起点安全扫码】
-  // 扫码与实体按键双重发车机制
   if (count == -1) {
     while (!isFinished) {
       applySpeed(0, 0);
@@ -781,9 +680,6 @@ void loop() {
     finalR = constrain(baseSpeed - (int)correction, 0, 255);
   }
 
-
-  // 最终向电机输出动力
-  //smartLED(finalL, finalR, isTurning);
   applySpeed(finalL, finalR);
 }
 
